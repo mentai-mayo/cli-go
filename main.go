@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/mentai-mayo/cli-go/array"
 )
 
 func Parse[T any](args []string) (*T, error) {
@@ -26,6 +28,9 @@ func Parse[T any](args []string) (*T, error) {
 		if rf.PkgPath == "" {
 			continue
 		}
+
+		// get field name
+		name := rf.Name
 
 		// check expected type
 		switch rf.Type.String() {
@@ -67,17 +72,142 @@ func Parse[T any](args []string) (*T, error) {
 		}
 
 		// add
-		expects = append(expects, Expect{position, long, short, etype})
+		expects = append(expects, Expect{name, position, long, short, etype})
 	}
 
-	return nil, errors.New("Unimplemented")
+	// create struct
+	parsed := reflect.New(rt).Interface().(*T)
+
+	// copy command-line arguments
+	arguments := array.FromSlice(args)
+
+	var remain []string
+	{
+		// parse command-line arguments
+		argsarr := array.New[string](uint(arguments.Len()))
+		for {
+			elem, ok := arguments.Dequeue()
+			if !ok {
+				break
+			}
+			for _, expect := range expects {
+				if *elem == "-" {
+					argsarr.Push(*elem)
+					continue
+				}
+				if *elem == "--" {
+					argsarr.Push(*elem)
+					for {
+						elem, ok := arguments.Dequeue()
+						if !ok {
+							break
+						}
+						argsarr.Push(*elem)
+					}
+					break
+				}
+				if *elem == fmt.Sprintf("--%s", expect.long) || *elem == fmt.Sprintf("-%s", expect.short) {
+					switch expect.etype {
+					case "string", "int":
+						value, ok := arguments.Dequeue()
+						if !ok {
+							return nil, NewNoOptionValueSetErr()
+						}
+						if expect.etype == "string" {
+							reflect.ValueOf(parsed).FieldByName(expect.name).SetString(*value)
+						} else {
+							value, err := strconv.ParseInt(*value, 10, 32)
+							if err != nil {
+								return nil, err
+							}
+							reflect.ValueOf(parsed).FieldByName(expect.name).SetInt(value)
+						}
+					case "bool":
+						reflect.ValueOf(parsed).FieldByName(expect.name).SetBool(true)
+					}
+				}
+				argsarr.Push(*elem)
+			}
+		}
+		remain = argsarr.IntoInverse()
+	}
+
+	for _, expect := range expects {
+		if expect.position < 0 {
+			continue
+		}
+		if expect.position >= len(remain) {
+			return nil, NewPositionOutOfRangeErr(expect.position)
+		}
+		switch expect.etype {
+		case "string":
+			reflect.ValueOf(parsed).FieldByName(expect.name).SetString(remain[expect.position])
+		case "int":
+			num, err := strconv.ParseInt(remain[expect.position], 10, 32)
+			if err != nil {
+				return nil, err
+			}
+			reflect.ValueOf(parsed).FieldByName(expect.name).SetInt(num)
+		case "bool":
+			switch remain[expect.position] {
+			case "true":
+				reflect.ValueOf(parsed).FieldByName(expect.name).SetBool(true)
+			case "false":
+				reflect.ValueOf(parsed).FieldByName(expect.name).SetBool(false)
+			default:
+				return nil, NewParseBoolErr(remain[expect.position])
+			}
+		}
+	}
+
+	fmt.Printf("rem: %#v\n", remain)
+	fmt.Printf("expects: %#v\n", expects)
+
+	return parsed, nil
 }
 
 type Expect struct {
+	name     string // field name
 	position int
 	long     string
 	short    string
-	etype    string // string, int, uint, bool
+	etype    string // string, int, bool
+}
+
+// ----- errors -----
+
+type ParseBoolErr struct {
+	raw string
+}
+
+func NewParseBoolErr(raw string) ParseBoolErr {
+	return ParseBoolErr{raw}
+}
+
+func (e ParseBoolErr) Error() string {
+	return fmt.Sprintf("cannot parse \"%s\" as bool", e.raw)
+}
+
+type PositionOutOfRangeErr struct {
+	pos int
+}
+
+func NewPositionOutOfRangeErr(pos int) PositionOutOfRangeErr {
+	return PositionOutOfRangeErr{pos}
+}
+
+func (e PositionOutOfRangeErr) Error() string {
+	return fmt.Sprintf("Position Out of Range Error: Position %d is out of range", e.pos)
+}
+
+type NoOptionValueSetErr struct{}
+
+func NewNoOptionValueSetErr() NoOptionValueSetErr {
+	return NoOptionValueSetErr{}
+}
+
+func (e NoOptionValueSetErr) Error() string {
+	return "No Option Value Set Error: no option value set"
 }
 
 type NonStructTargetErr struct {
