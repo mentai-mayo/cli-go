@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/mentai-mayo/cli-go/array"
 )
@@ -25,7 +26,7 @@ func Parse[T any](args []string) (*T, error) {
 		rf := rt.Field(i)
 
 		// check is private
-		if rf.PkgPath == "" {
+		if unicode.IsLower(rune(rf.Name[0])) {
 			continue
 		}
 
@@ -36,7 +37,7 @@ func Parse[T any](args []string) (*T, error) {
 		switch rf.Type.String() {
 		case "string", "int", "uint", "bool":
 		default:
-			return nil, errors.New("unsupported expected type detected")
+			return nil, errors.New(fmt.Sprintf("unsupported expected type \"%s\" detected", rf.Type.String()))
 		}
 		etype := rf.Type.String()
 
@@ -81,30 +82,37 @@ func Parse[T any](args []string) (*T, error) {
 	// copy command-line arguments
 	arguments := array.FromSlice(args)
 
+	fmt.Printf("args: %#v\n", args)
+	fmt.Printf("arguments: %#v\n", arguments)
+
 	var remain []string
 	{
 		// parse command-line arguments
 		argsarr := array.New[string](uint(arguments.Len()))
 		for {
 			elem, ok := arguments.Dequeue()
+			fmt.Printf("elem, ok = %#v, %t\n", elem, ok)
 			if !ok {
 				break
 			}
-			for _, expect := range expects {
-				if *elem == "-" {
-					argsarr.Push(*elem)
-					continue
-				}
-				if *elem == "--" {
-					argsarr.Push(*elem)
-					for {
-						elem, ok := arguments.Dequeue()
-						if !ok {
-							break
-						}
-						argsarr.Push(*elem)
+			if *elem == "-" {
+				argsarr.Push(*elem)
+				continue
+			}
+			if *elem == "--" {
+				argsarr.Push(*elem)
+				for {
+					elem, ok := arguments.Dequeue()
+					if !ok {
+						break
 					}
-					break
+					argsarr.Push(*elem)
+				}
+				break
+			}
+			for _, expect := range expects {
+				if expect.position < 0 {
+					continue
 				}
 				if *elem == fmt.Sprintf("--%s", expect.long) || *elem == fmt.Sprintf("-%s", expect.short) {
 					switch expect.etype {
@@ -126,11 +134,14 @@ func Parse[T any](args []string) (*T, error) {
 						reflect.ValueOf(parsed).FieldByName(expect.name).SetBool(true)
 					}
 				}
-				argsarr.Push(*elem)
 			}
+			argsarr.Push(*elem)
 		}
-		remain = argsarr.IntoInverse()
+		remain = argsarr.Into()
+		fmt.Printf("rem: %#v\n", remain)
 	}
+
+	fmt.Printf("expects: %#v\n", expects)
 
 	for _, expect := range expects {
 		if expect.position < 0 {
@@ -159,9 +170,6 @@ func Parse[T any](args []string) (*T, error) {
 			}
 		}
 	}
-
-	fmt.Printf("rem: %#v\n", remain)
-	fmt.Printf("expects: %#v\n", expects)
 
 	return parsed, nil
 }

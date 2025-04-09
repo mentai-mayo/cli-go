@@ -5,12 +5,21 @@ type Array[T any] struct {
 }
 
 // ----- info -----
-func (a Array[T]) Len() int {
+
+// array length
+func (a *Array[T]) Len() int {
 	return len(a.inner)
 }
 
+// array capacity
+func (a *Array[T]) Cap() int {
+	return cap(a.inner)
+}
+
 // ----- iterator -----
-func (a Array[T]) Iter() func(yield func(i uint, v T) bool) {
+
+// get iterator
+func (a *Array[T]) Iter() func(yield func(i uint, v T) bool) {
 	return func(yield func(i uint, v T) bool) {
 		for i := 0; i < len(a.inner); i++ {
 			v := a.inner[i]
@@ -22,11 +31,11 @@ func (a Array[T]) Iter() func(yield func(i uint, v T) bool) {
 }
 
 // ----- mutable methods -----
-func (a Array[T]) Push(elem T) {
+func (a *Array[T]) Push(elem T) {
 	a.inner = append(a.inner, elem)
 }
 
-func (a Array[T]) Pop() (*T, bool) {
+func (a *Array[T]) Pop() (*T, bool) {
 	if len(a.inner) == 0 {
 		return nil, false
 	}
@@ -35,7 +44,7 @@ func (a Array[T]) Pop() (*T, bool) {
 	return &elem, true
 }
 
-func (a Array[T]) Dequeue() (*T, bool) {
+func (a *Array[T]) Dequeue() (*T, bool) {
 	if len(a.inner) == 0 {
 		return nil, false
 	}
@@ -45,13 +54,13 @@ func (a Array[T]) Dequeue() (*T, bool) {
 }
 
 // ----- convert -----
-func (a Array[T]) Into() []T {
-	slice := make([]T, 0, len(a.inner))
+func (a *Array[T]) Into() []T {
+	slice := make([]T, len(a.inner), len(a.inner))
 	copy(slice, a.inner)
 	return slice
 }
 
-func (a Array[T]) IntoInverse() []T {
+func (a *Array[T]) IntoInverse() []T {
 	slice := a.Into()
 	for i := 0; i < len(slice)/2; i++ {
 		slice[i], slice[len(slice)-1] = slice[len(slice)-1], slice[i]
@@ -66,7 +75,7 @@ func New[T any](cap uint) Array[T] {
 }
 
 func FromSlice[T any](slice []T) Array[T] {
-	inner := make([]T, 0, cap(slice))
+	inner := make([]T, len(slice), cap(slice))
 	copy(inner, slice)
 	return Array[T]{inner}
 }
