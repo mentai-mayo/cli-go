@@ -175,11 +175,74 @@ func Parse[T any](args []string) (*T, error) {
 }
 
 type Expect struct {
-	name     string // field name
-	position int
-	long     string
-	short    string
-	etype    string // string, int, bool
+	name  string // field name
+	long  string
+	short string
+	etype reflect.Kind // string, int, bool
+}
+
+type Expects struct {
+	arguments []Expect
+	options   []Expect
+}
+
+func InitExpects(rtype reflect.Type) (*Expects, error) {
+	fields := rtype.NumField()
+	arguments := make([]Expect, 0, fields)
+	options := make([]Expect, 0, fields)
+	position := 0
+	for i := 0; i < fields; i++ {
+		field := rtype.Field(i)
+
+		name := field.Name
+
+		// --- private field check ---
+		if unicode.IsLower(rune(name[0])) {
+			// `field` is private field
+			continue
+		}
+
+		// --- expected type ---
+		var etype reflect.Kind
+		switch field.Type.Kind() {
+		case reflect.String, reflect.Int, reflect.Bool:
+			etype = field.Type.Kind()
+		default:
+			return nil, errors.New(fmt.Sprintf("Unsupported Expected Type: Unsupported expected type [%s (kind: %s)] detected", field.Type.String(), field.Type.Kind().String()))
+		}
+
+		// --- get long option name ---
+		long := field.Tag.Get("long")
+
+		// --- get short option name ---
+		short := field.Tag.Get("short")
+
+		if long == "" && short == "" {
+			arguments = append(arguments, Expect{name, long, short, etype})
+		} else {
+			options = append(options, Expect{name, long, short, etype})
+		}
+	}
+}
+
+type CLIArguments struct {
+	cursor int
+	slice  []string
+}
+
+func (a *CLIArguments) Next() string {
+	var next string
+	if len(a.slice) <= a.cursor {
+		next = ""
+	} else {
+		next = a.slice[a.cursor]
+		a.cursor += 1
+	}
+	return next
+}
+
+func NewCLIArguments(osargs []string) CLIArguments {
+	return CLIArguments{cursor: 0, slice: osargs}
 }
 
 // ----- errors -----
