@@ -1,294 +1,100 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
-	"strings"
-	"unicode"
 
-	"github.com/mentai-mayo/cli-go/array"
+	clierr "github.com/mentai-mayo/cli-go/error"
+	expect "github.com/mentai-mayo/cli-go/expect"
 )
 
-func Parse[T any](args []string) (*T, error) {
-	rt := reflect.TypeOf((*T)(nil)).Elem()
-	rv := reflect.New(rt).Elem()
+type Parser[T any] struct {
+	//
+}
 
-	// check is T struct
-	if rv.Kind().String() != "struct" {
-		return nil, NewNonStructTargetErr(rv.Kind().String())
+func Parse[T any](list []string) (*T, error) {
+
+	expects, err := expect.New[T]()
+	if err != nil {
+		return nil, err
 	}
 
-	// get expect names/types
-	expects := make([]Expect, 0, rt.NumField())
-	for i := 0; i < rt.NumField(); i++ {
-		rf := rt.Field(i)
+	// reflect.Type[T]
+	rtype := reflect.TypeOf((*T)(nil)).Elem()
 
-		// check is private
-		if unicode.IsLower(rune(rf.Name[0])) {
+	// reflect.Value[*T]
+	target := reflect.New(rtype)
+
+	index := 0
+	next := func() (string, bool) {
+		if index >= len(list) {
+			return "", false
+		}
+		arg := list[index]
+		index += 1
+		return arg, true
+	}
+
+	optend := false
+	for {
+		arg, ok := next()
+		if !ok {
+			break
+		}
+
+		// end of option
+		if arg == "--" {
+			optend = true
 			continue
 		}
 
-		// get field name
-		name := rf.Name
-
-		// check expected type
-		switch rf.Type.String() {
-		case "string", "int", "uint", "bool":
-		default:
-			return nil, errors.New(fmt.Sprintf("unsupported expected type \"%s\" detected", rf.Type.String()))
-		}
-		etype := rf.Type.String()
-
-		// check position
-		tag, ok := rf.Tag.Lookup("pos")
-		var position int
-		if ok {
-			num, err := strconv.Atoi(tag)
-			if err != nil {
-				return nil, errors.New("tag(\"pos\") must be parseable as a integer")
-			}
-			position = num
-		} else {
-			position = -1
-		}
-
-		// check long option name
-		tag, ok = rf.Tag.Lookup("long")
-		var long string
-		if ok {
-			long = tag
-		} else {
-			long = strings.ToLower(rf.Name)
-		}
-
-		// check short option name
-		tag, ok = rf.Tag.Lookup("short")
-		var short string
-		if ok {
-			short = tag
-		} else {
-			short = ""
-		}
-
-		// add
-		expects = append(expects, Expect{name, position, long, short, etype})
-	}
-
-	// create struct
-	parsed := reflect.New(rt).Interface().(*T)
-
-	// copy command-line arguments
-	arguments := array.FromSlice(args)
-
-	fmt.Printf("args: %#v\n", args)
-	fmt.Printf("arguments: %#v\n", arguments)
-
-	var remain []string
-	{
-		// parse command-line arguments
-		argsarr := array.New[string](uint(arguments.Len()))
-		for {
-			elem, ok := arguments.Dequeue()
-			fmt.Printf("elem, ok = %#v, %t\n", elem, ok)
-			if !ok {
-				break
-			}
-			if *elem == "-" {
-				argsarr.Push(*elem)
-				continue
-			}
-			if *elem == "--" {
-				argsarr.Push(*elem)
-				for {
-					elem, ok := arguments.Dequeue()
-					if !ok {
-						break
-					}
-					argsarr.Push(*elem)
+		// long option
+		if !optend && arg[0:2] == "--" {
+			info := expects.GetOpt(arg[2:])
+			field := target.FieldByName(info.FieldName())
+			switch info.EType() {
+			case expects.BOOL:
+				field.SetBool(true)
+			case expects.STRING:
+				value, ok := next()
+				if !ok {
+					return nil, clierr.New("No Value Provided", fmt.Sprintf("key \"%s\" expects string value, but no one provided", arg[2:]))
 				}
-				break
+				field.SetString(value)
 			}
-			for _, expect := range expects {
-				if expect.position < 0 {
-					continue
-				}
-				if *elem == fmt.Sprintf("--%s", expect.long) || *elem == fmt.Sprintf("-%s", expect.short) {
-					switch expect.etype {
-					case "string", "int":
-						value, ok := arguments.Dequeue()
-						if !ok {
-							return nil, NewNoOptionValueSetErr()
-						}
-						if expect.etype == "string" {
-							reflect.ValueOf(parsed).FieldByName(expect.name).SetString(*value)
-						} else {
-							value, err := strconv.ParseInt(*value, 10, 32)
-							if err != nil {
-								return nil, err
-							}
-							reflect.ValueOf(parsed).FieldByName(expect.name).SetInt(value)
-						}
-					case "bool":
-						reflect.ValueOf(parsed).FieldByName(expect.name).SetBool(true)
-					}
-				}
-			}
-			argsarr.Push(*elem)
-		}
-		remain = argsarr.Into()
-		fmt.Printf("rem: %#v\n", remain)
-	}
-
-	fmt.Printf("expects: %#v\n", expects)
-
-	for _, expect := range expects {
-		if expect.position < 0 {
-			continue
-		}
-		if expect.position >= len(remain) {
-			return nil, NewPositionOutOfRangeErr(expect.position)
-		}
-		switch expect.etype {
-		case "string":
-			reflect.ValueOf(parsed).FieldByName(expect.name).SetString(remain[expect.position])
-		case "int":
-			num, err := strconv.ParseInt(remain[expect.position], 10, 32)
-			if err != nil {
-				return nil, err
-			}
-			reflect.ValueOf(parsed).FieldByName(expect.name).SetInt(num)
-		case "bool":
-			switch remain[expect.position] {
-			case "true":
-				reflect.ValueOf(parsed).FieldByName(expect.name).SetBool(true)
-			case "false":
-				reflect.ValueOf(parsed).FieldByName(expect.name).SetBool(false)
-			default:
-				return nil, NewParseBoolErr(remain[expect.position])
-			}
-		}
-	}
-
-	return parsed, nil
-}
-
-type Expect struct {
-	name  string // field name
-	long  string
-	short string
-	etype reflect.Kind // string, int, bool
-}
-
-type Expects struct {
-	arguments []Expect
-	options   []Expect
-}
-
-func InitExpects(rtype reflect.Type) (*Expects, error) {
-	fields := rtype.NumField()
-	arguments := make([]Expect, 0, fields)
-	options := make([]Expect, 0, fields)
-	position := 0
-	for i := 0; i < fields; i++ {
-		field := rtype.Field(i)
-
-		name := field.Name
-
-		// --- private field check ---
-		if unicode.IsLower(rune(name[0])) {
-			// `field` is private field
 			continue
 		}
 
-		// --- expected type ---
-		var etype reflect.Kind
-		switch field.Type.Kind() {
-		case reflect.String, reflect.Int, reflect.Bool:
-			etype = field.Type.Kind()
-		default:
-			return nil, errors.New(fmt.Sprintf("Unsupported Expected Type: Unsupported expected type [%s (kind: %s)] detected", field.Type.String(), field.Type.Kind().String()))
+		// short option
+		if !optend && rune(arg[0]) == '-' {
+			info := expects.GetOpt(arg[1:])
+
+			continue
 		}
 
-		// --- get long option name ---
-		long := field.Tag.Get("long")
-
-		// --- get short option name ---
-		short := field.Tag.Get("short")
-
-		if long == "" && short == "" {
-			arguments = append(arguments, Expect{name, long, short, etype})
-		} else {
-			options = append(options, Expect{name, long, short, etype})
-		}
+		// argument
 	}
+
+	return nil, clierr.New("Not Implemented", "func Parse[T]([]string) is not implemented")
 }
 
-type CLIArguments struct {
-	cursor int
-	slice  []string
+type Arguments struct {
+	inner []KV
 }
 
-func (a *CLIArguments) Next() string {
-	var next string
-	if len(a.slice) <= a.cursor {
-		next = ""
-	} else {
-		next = a.slice[a.cursor]
-		a.cursor += 1
-	}
-	return next
+func Normalize(list []string, expects expect.Expects) Arguments {
+	array := make([]KV, 0, 0)
 }
 
-func NewCLIArguments(osargs []string) CLIArguments {
-	return CLIArguments{cursor: 0, slice: osargs}
+type KV struct {
+	key   string
+	value []string
 }
 
-// ----- errors -----
-
-type ParseBoolErr struct {
-	raw string
+func NewKV(key string, value []string) KV {
+	return KV{key, value}
 }
 
-func NewParseBoolErr(raw string) ParseBoolErr {
-	return ParseBoolErr{raw}
-}
-
-func (e ParseBoolErr) Error() string {
-	return fmt.Sprintf("cannot parse \"%s\" as bool", e.raw)
-}
-
-type PositionOutOfRangeErr struct {
-	pos int
-}
-
-func NewPositionOutOfRangeErr(pos int) PositionOutOfRangeErr {
-	return PositionOutOfRangeErr{pos}
-}
-
-func (e PositionOutOfRangeErr) Error() string {
-	return fmt.Sprintf("Position Out of Range Error: Position %d is out of range", e.pos)
-}
-
-type NoOptionValueSetErr struct{}
-
-func NewNoOptionValueSetErr() NoOptionValueSetErr {
-	return NoOptionValueSetErr{}
-}
-
-func (e NoOptionValueSetErr) Error() string {
-	return "No Option Value Set Error: no option value set"
-}
-
-type NonStructTargetErr struct {
-	actual string
-}
-
-func NewNonStructTargetErr(actual string) NonStructTargetErr {
-	return NonStructTargetErr{actual}
-}
-
-func (e NonStructTargetErr) Error() string {
-	return fmt.Sprintf("Non-Struct Target Error: arguments cannot be parsed for non-struct types (got: %s)", e.actual)
+func (kv KV) Get() (string, []string) {
+	return kv.key, kv.value
 }

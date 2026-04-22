@@ -13,6 +13,9 @@ type CLIStruct struct {
 }
 
 func main() {
-	fmt.Println("Hello, world!")
-	cli.Parse[CLIStruct](os.Args)
+	data, err := cli.Parse[CLIStruct](os.Args)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%#v\n", data)
 }
